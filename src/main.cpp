@@ -28,6 +28,8 @@ void goToSleep();
 void enableWatchdog();
 void setupRadio();
 
+#define PULSE_THRESHOLD 100
+
 enum DetectorState
 {
     DS_SETUP,
@@ -39,9 +41,8 @@ enum DetectorState
 
 struct RadioPacket
 {
-    uint32_t time;
-    uint32_t pulses8s;
     uint32_t pulses;
+    uint32_t pulsesTotal;
 };
 
 const static uint8_t PIN_RADIO_MOMI = 4;
@@ -58,12 +59,6 @@ RadioPacket radioPacket;
 volatile uint32_t pulses = 0;
 volatile boolean isWdtTimeout = false;
 SendOnlySoftwareSerial s(3);
-
-ISR(WDT_vect) // Watchdog interrupt handler.
-{
-    disableWatchdog();
-    isWdtTimeout = true;
-}
 
 ISR(PCINT0_vect)
 {
@@ -94,41 +89,12 @@ void setup()
     state = DS_DETECTING_LOWLEVEL;
 
     enableLowLevelPinChangeInterupt();
-    enableWatchdog();
+    //enableWatchdog();
 }
 
 void loop()
 {
     // put your main code here, to run repeatedly:
-
-    if (isWdtTimeout)
-    {
-
-        radioPacket.time += 8; // Estimation
-        radioPacket.pulses8s = pulses;
-        radioPacket.pulses += pulses;
-        pulses = 0;
-
-        s.println("REPORT START");
-        s.print("Time:");
-        s.println(radioPacket.time);
-        s.print("Momentan power:");
-        s.println(radioPacket.pulses8s);
-        s.print("Total power:");
-        s.println(radioPacket.pulses);
-        s.println("REPORT END");
-
-        // Enable the power bus, setup radio and send
-        pinMode(PIN_POWER_BUS, OUTPUT);
-        digitalWrite(PIN_POWER_BUS, PWR_ON);
-        setupRadio();
-
-        _radio.send(DESTINATION_RADIO_ID, &radioPacket, sizeof(radioPacket));
-
-        isWdtTimeout = false;
-        enableWatchdog();
-        goToSleep();
-    }
 
     switch (state)
     {
@@ -144,6 +110,27 @@ void loop()
         break;
 
     case DS_GOTO_SLEEP:
+
+        if (pulses >= PULSE_THRESHOLD)
+        {
+
+            radioPacket.pulses = pulses;
+            radioPacket.pulsesTotal += pulses;
+            pulses = 0;
+
+            s.print("Pulses:");
+            s.println(radioPacket.pulses);
+            s.print("Total pulses:");
+            s.println(radioPacket.pulsesTotal);
+
+            // Enable the power bus, setup radio and send
+            pinMode(PIN_POWER_BUS, OUTPUT);
+            digitalWrite(PIN_POWER_BUS, PWR_ON);
+            setupRadio();
+
+            _radio.send(DESTINATION_RADIO_ID, &radioPacket, sizeof(radioPacket));
+        }
+
         goToSleep();
         break;
 
