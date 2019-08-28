@@ -1,4 +1,3 @@
-// ATtiny85 sleep mode, wake on pin change interrupt demo
 
 // ATMEL ATTINY 25/45/85 / ARDUINO
 //
@@ -10,7 +9,6 @@
 //                  +----+
 
 #include <NRFLite.h>
-
 #include <avr/sleep.h> // Sleep Modes
 #include <avr/power.h> // Power management
 #include <avr/wdt.h>
@@ -35,6 +33,7 @@ enum DetectorState
     DS_SETUP,
     DS_DETECTING_LOWLEVEL,
     DS_DETECTING_RISING,
+    DS_RADIO_TRANSMIT,
     DS_GOTO_SLEEP
 
 };
@@ -57,34 +56,41 @@ volatile DetectorState state = DS_SETUP;
 NRFLite _radio;
 RadioPacket radioPacket;
 volatile uint32_t pulses = 0;
-volatile boolean isWdtTimeout = false;
 SendOnlySoftwareSerial s(3);
 
 ISR(PCINT0_vect)
 {
 
-    if (state == DS_DETECTING_LOWLEVEL)
-    {
+    if (state == DS_DETECTING_LOWLEVEL) {
         state = DS_DETECTING_RISING;
         disablePinChangeInterupt();
     }
-    else if (state == DS_DETECTING_RISING)
-    {
+    else if (state == DS_DETECTING_RISING) {
         pulses++;
-        state = DS_GOTO_SLEEP;
+
+        if(pulses < PULSE_THRESHOLD){
+            state = DS_GOTO_SLEEP;
+        } else {
+            state = DS_RADIO_TRANSMIT;
+        }
+    } else if (state == DS_RADIO_TRANSMIT){
+        // Continue count pulses during transmit
+        pulses++;
     }
+
 }
 
 void setup()
 {
     // put your setup code here, to run once:
 
-    disableWatchdog();
+    // disableWatchdog();
 
     s.begin(9600);
     s.println("(Re)start xxxxxxxxxxxxxx");
 
     pinMode(PIN_DETECT, INPUT);
+    pinMode(PIN_POWER_BUS, INPUT);
 
     state = DS_DETECTING_LOWLEVEL;
 
@@ -109,27 +115,39 @@ void loop()
 
         break;
 
+    case DS_RADIO_TRANSMIT:
+
+        radioPacket.pulses = pulses;
+        pulses = 0;
+        radioPacket.pulsesTotal += radioPacket.pulses;
+        
+
+        s.print("Pulses:");
+        s.println(radioPacket.pulses);
+        s.print("Total pulses:");
+        s.println(radioPacket.pulsesTotal);
+
+        // Enable the power bus, setup radio and send
+        //uint32_t timer = millis();
+        pinMode(PIN_POWER_BUS, OUTPUT);
+        digitalWrite(PIN_POWER_BUS, PWR_ON);
+        setupRadio();
+
+        _radio.send(DESTINATION_RADIO_ID, &radioPacket, sizeof(radioPacket));
+
+
+        _radio.powerDown(); // Put the radio into a low power state.
+        digitalWrite(PIN_POWER_BUS, PWR_OFF);
+        //timer = millis() - timer;
+        //s.println(timer);
+        pinMode(PIN_POWER_BUS, INPUT);
+
+
+        state = DS_GOTO_SLEEP;         
+
+        break;
+
     case DS_GOTO_SLEEP:
-
-        if (pulses >= PULSE_THRESHOLD)
-        {
-
-            radioPacket.pulses = pulses;
-            radioPacket.pulsesTotal += pulses;
-            pulses = 0;
-
-            s.print("Pulses:");
-            s.println(radioPacket.pulses);
-            s.print("Total pulses:");
-            s.println(radioPacket.pulsesTotal);
-
-            // Enable the power bus, setup radio and send
-            pinMode(PIN_POWER_BUS, OUTPUT);
-            digitalWrite(PIN_POWER_BUS, PWR_ON);
-            setupRadio();
-
-            _radio.send(DESTINATION_RADIO_ID, &radioPacket, sizeof(radioPacket));
-        }
 
         goToSleep();
         break;
@@ -187,8 +205,7 @@ void goToSleep()
     cli();
     if (digitalRead(PIN_DETECT) == HIGH)
     {
-        _radio.powerDown(); // Put the radio into a low power state.
-        digitalWrite(PIN_POWER_BUS, PWR_OFF);
+        
         ADCSRA &= ~_BV(ADEN); // Disable ADC to save power.
 
         state = DS_DETECTING_LOWLEVEL;
@@ -200,8 +217,6 @@ void goToSleep()
         sleep_cpu();
         sleep_disable();
 
-        ADCSRA |= _BV(ADEN); // Re-enable ADC.
-        digitalWrite(PIN_POWER_BUS, PWR_ON);
     }
     sei();
 
