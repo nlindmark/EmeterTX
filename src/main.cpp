@@ -21,6 +21,8 @@
 void disablePinChangeInterupt();
 void enableLowLevelPinChangeInterupt();
 void enableRisingEdgePinChangeInterupt();
+void enableFallingEdgePinChangeInterupt();
+void enableEdgeChangeInterupt();
 void disableWatchdog(void);
 void goToSleep();
 void enableWatchdog();
@@ -30,9 +32,7 @@ void setupRadio();
 
 enum DetectorState
 {
-    DS_SETUP,
-    DS_DETECTING_LOWLEVEL,
-    DS_DETECTING_RISING,
+    DS_DETECTING_EDGE,
     DS_RADIO_TRANSMIT,
     DS_GOTO_SLEEP
 
@@ -52,7 +52,7 @@ const static uint8_t PIN_DETECT = PB2;
 const static uint8_t DESTINATION_RADIO_ID = 0;
 const static uint8_t SENDER_RADIO_ID = 1;
 
-volatile DetectorState state = DS_SETUP;
+volatile DetectorState state;
 NRFLite _radio;
 RadioPacket radioPacket;
 volatile uint32_t pulses = 0;
@@ -61,11 +61,7 @@ SendOnlySoftwareSerial s(3);
 ISR(PCINT0_vect)
 {
 
-    if (state == DS_DETECTING_LOWLEVEL) {
-        state = DS_DETECTING_RISING;
-        disablePinChangeInterupt();
-    }
-    else if (state == DS_DETECTING_RISING) {
+    if (state == DS_DETECTING_EDGE) {
         pulses++;
 
         if(pulses < PULSE_THRESHOLD){
@@ -73,7 +69,7 @@ ISR(PCINT0_vect)
         } else {
             state = DS_RADIO_TRANSMIT;
         }
-    } else if (state == DS_RADIO_TRANSMIT){
+    } else {
         // Continue count pulses during transmit
         pulses++;
     }
@@ -92,9 +88,9 @@ void setup()
     pinMode(PIN_DETECT, INPUT);
     pinMode(PIN_POWER_BUS, INPUT);
 
-    state = DS_DETECTING_LOWLEVEL;
+    state = DS_DETECTING_EDGE;
+    enableEdgeChangeInterupt();
 
-    enableLowLevelPinChangeInterupt();
     //enableWatchdog();
 }
 
@@ -105,15 +101,11 @@ void loop()
     switch (state)
     {
 
-    case DS_DETECTING_LOWLEVEL:
-        /* code */
+    case DS_DETECTING_EDGE:
+        /* Do nothing */
 
         break;
 
-    case DS_DETECTING_RISING:
-        enableRisingEdgePinChangeInterupt();
-
-        break;
 
     case DS_RADIO_TRANSMIT:
 
@@ -175,6 +167,16 @@ void enableLowLevelPinChangeInterupt()
     GIMSK |= bit(PCIE);                  // enable pin change interrupts
 }
 
+void enableEdgeChangeInterupt()
+{
+    // pin change interrupt
+    PCMSK |= bit(PCINT2);                // want pin PB2 / pin 7
+    MCUCR &= ~(bit(ISC01) | bit(ISC00)); // Any edge triggers interrupt
+    GIFR |= bit(PCIF);                   // clear any outstanding interrupts
+    GIMSK |= bit(PCIE);                  // enable pin change interrupts
+}
+
+
 void enableRisingEdgePinChangeInterupt()
 {
     // pin change interrupt
@@ -183,6 +185,16 @@ void enableRisingEdgePinChangeInterupt()
     GIFR |= bit(PCIF);                  // clear any outstanding interrupts
     GIMSK |= bit(PCIE);                 // enable pin change interrupts
 }
+
+void enableFallingEdgePinChangeInterupt()
+{
+    // pin change interrupt
+    PCMSK |= bit(PCINT2);               // want pin PB2 / pin 7
+    MCUCR |= (bit(ISC01) | ~bit(ISC00)); // Falling edge triggers interrupt
+    GIFR |= bit(PCIF);                  // clear any outstanding interrupts
+    GIMSK |= bit(PCIE);                 // enable pin change interrupts
+}
+
 
 void disablePinChangeInterupt()
 {
@@ -208,10 +220,10 @@ void goToSleep()
         
         ADCSRA &= ~_BV(ADEN); // Disable ADC to save power.
 
-        state = DS_DETECTING_LOWLEVEL;
+        state = DS_DETECTING_EDGE;
         s.print("Going to sleep  ");
         s.println(pulses);
-        enableLowLevelPinChangeInterupt();
+        //enableEdgeChangeInterupt();
         sleep_enable();
         sei();
         sleep_cpu();
