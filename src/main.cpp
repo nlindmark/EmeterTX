@@ -12,11 +12,11 @@
 #include <avr/sleep.h> // Sleep Modes
 #include <avr/power.h> // Power management
 #include <avr/wdt.h>
-#include <SendOnlySoftwareSerial.h>
 #include <Arduino.h>
 
 #define PWR_ON HIGH
 #define PWR_OFF LOW
+
 
 void disablePinChangeInterupt();
 void enableLowLevelPinChangeInterupt();
@@ -27,8 +27,9 @@ void disableWatchdog(void);
 void goToSleep();
 void enableWatchdog();
 void setupRadio();
+void powerDownRadio();
 
-#define PULSE_THRESHOLD 100
+#define PULSE_THRESHOLD 1
 
 enum DetectorState
 {
@@ -44,10 +45,12 @@ struct RadioPacket
     uint32_t pulsesTotal;
 };
 
-const static uint8_t PIN_RADIO_MOMI = 4;
-const static uint8_t PIN_RADIO_SCK = 1;
-const static uint8_t PIN_POWER_BUS = 0;
-const static uint8_t PIN_DETECT = PB2;
+const static uint8_t PIN_RADIO_MOMI = PB4;
+const static uint8_t PIN_RADIO_SCK = PB1;
+const static uint8_t PIN_POWER_BUS = PB0;
+const static uint8_t PIN_SENSE = PB2;
+const static uint8_t PIN_SENSE2 = PB3;
+const static uint8_t PIN_RESET = PB5;
 
 const static uint8_t DESTINATION_RADIO_ID = 0;
 const static uint8_t SENDER_RADIO_ID = 1;
@@ -56,7 +59,6 @@ volatile DetectorState state;
 NRFLite _radio;
 RadioPacket radioPacket;
 volatile uint32_t pulses = 0;
-SendOnlySoftwareSerial s(3);
 
 ISR(PCINT0_vect)
 {
@@ -73,6 +75,7 @@ ISR(PCINT0_vect)
         // Continue count pulses during transmit
         pulses++;
     }
+    //disablePinChangeInterupt();
 
 }
 
@@ -80,13 +83,20 @@ void setup()
 {
     // put your setup code here, to run once:
 
-    // disableWatchdog();
-
-    s.begin(9600);
-    s.println("(Re)start xxxxxxxxxxxxxx");
-
-    pinMode(PIN_DETECT, INPUT);
+    // Set all pins to input to save current
+    pinMode(PIN_SENSE, INPUT);
+    digitalWrite(PIN_SENSE, LOW); // Disable pullup resistor
+    pinMode(PIN_SENSE2, INPUT);
+    digitalWrite(PIN_SENSE2, LOW); // Disable pullup resistor
     pinMode(PIN_POWER_BUS, INPUT);
+    digitalWrite(PIN_POWER_BUS, LOW); // Disable pullup resistor
+    pinMode(PIN_RADIO_MOMI, INPUT);
+    digitalWrite(PIN_RADIO_MOMI, LOW); // Disable pullup resistor
+    pinMode(PIN_RADIO_SCK, INPUT);
+    digitalWrite(PIN_RADIO_SCK, LOW); // Disable pullup resistor
+
+
+
 
     state = DS_DETECTING_EDGE;
     enableEdgeChangeInterupt();
@@ -97,6 +107,9 @@ void setup()
 void loop()
 {
     // put your main code here, to run repeatedly:
+
+    //delay(200);
+    //enableEdgeChangeInterupt();
 
     switch (state)
     {
@@ -114,25 +127,20 @@ void loop()
         radioPacket.pulsesTotal += radioPacket.pulses;
         
 
-        s.print("Pulses:");
-        s.println(radioPacket.pulses);
-        s.print("Total pulses:");
-        s.println(radioPacket.pulsesTotal);
-
         // Enable the power bus, setup radio and send
-        //uint32_t timer = millis();
         pinMode(PIN_POWER_BUS, OUTPUT);
         digitalWrite(PIN_POWER_BUS, PWR_ON);
+        delay(20); // Wait for power to stabilize 
         setupRadio();
 
         _radio.send(DESTINATION_RADIO_ID, &radioPacket, sizeof(radioPacket));
 
 
-        _radio.powerDown(); // Put the radio into a low power state.
+        powerDownRadio();
+        
         digitalWrite(PIN_POWER_BUS, PWR_OFF);
-        //timer = millis() - timer;
-        //s.println(timer);
         pinMode(PIN_POWER_BUS, INPUT);
+        digitalWrite(PIN_POWER_BUS, LOW); // Disable pullup resistor
 
 
         state = DS_GOTO_SLEEP;         
@@ -151,12 +159,22 @@ void loop()
 
 void setupRadio()
 {
-    if (!_radio.initTwoPin(SENDER_RADIO_ID, PIN_RADIO_MOMI, PIN_RADIO_SCK, NRFLite::BITRATE250KBPS))
-    {
-        while (1)
-            ; // Cannot communicate with radio.
-    }
+    _radio.initTwoPin(SENDER_RADIO_ID, PIN_RADIO_MOMI, PIN_RADIO_SCK, NRFLite::BITRATE250KBPS);
+    
 }
+void powerDownRadio()
+{
+    _radio.powerDown(); // Put the radio into a low power state
+
+    pinMode(PIN_RADIO_MOMI, INPUT);
+    digitalWrite(PIN_RADIO_MOMI, LOW); // Disable pullup resistor
+
+    pinMode(PIN_RADIO_SCK, INPUT);
+    digitalWrite(PIN_RADIO_SCK, LOW); // Disable pullup resistor
+
+
+}
+
 
 void enableLowLevelPinChangeInterupt()
 {
@@ -215,15 +233,14 @@ void goToSleep()
 
     set_sleep_mode(SLEEP_MODE_PWR_DOWN);
     cli();
-    if (digitalRead(PIN_DETECT) == HIGH)
+
     {
         
         ADCSRA &= ~_BV(ADEN); // Disable ADC to save power.
 
         state = DS_DETECTING_EDGE;
-        s.print("Going to sleep  ");
-        s.println(pulses);
-        //enableEdgeChangeInterupt();
+        
+        //sleep_bod_disable();
         sleep_enable();
         sei();
         sleep_cpu();
